@@ -92,9 +92,12 @@
         <!-- Right Column: Employee List -->
         <div class="w-full lg:w-2/3">
             <div class="mb-6 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
-                <div class="flex items-center gap-3">
-                    <h2 class="text-xl font-semibold text-slate-800">Directorio de Colaboradores</h2>
-                    <span id="employeeCount" class="bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded-full">0 registrados</span>
+                <div class="flex flex-col gap-2 w-full sm:w-auto">
+                    <div class="flex items-center gap-3">
+                        <h2 class="text-xl font-semibold text-slate-800">Directorio de Colaboradores</h2>
+                        <span id="employeeCount" class="bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded-full">0 registrados</span>
+                    </div>
+                    <input id="searchInput" type="text" placeholder="Buscar por nombre..." class="mt-2 w-full sm:w-64 px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-sm" oninput="renderEmployees()">
                 </div>
                 <button onclick="downloadReport()" class="bg-green-600 hover:bg-green-700 text-white text-sm font-medium py-2 px-4 rounded-lg flex items-center justify-center gap-2 transition-colors shadow-sm">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -235,7 +238,9 @@
 
         async function handleAddEmployee(e) {
             e.preventDefault();
-            const name = document.getElementById('empName').value.trim();
+            // Forzar mayúsculas en el nombre
+            let name = document.getElementById('empName').value.trim().toUpperCase();
+            document.getElementById('empName').value = name; // Reflejar en el input
             const nss = document.getElementById('empNSS').value.trim();
             const curp = document.getElementById('empCURP').value.trim().toUpperCase();
             const rfc = document.getElementById('empRFC').value.trim().toUpperCase();
@@ -509,30 +514,30 @@
             const container = document.getElementById('employeesList');
             const emptyState = document.getElementById('emptyState');
             const countBadge = document.getElementById('employeeCount');
-
-            countBadge.textContent = `${employees.length} registrado${employees.length !== 1 ? 's' : ''}`;
-
-            if (employees.length === 0) {
+            // Buscador por nombre (case-insensitive)
+            const searchInput = document.getElementById('searchInput');
+            let filtered = [];
+            if (searchInput && searchInput.value.trim() !== '') {
+                const search = searchInput.value.trim().toUpperCase();
+                filtered = employees.filter(emp => emp.name.toUpperCase().includes(search));
+            }
+            countBadge.textContent = `${filtered.length} registrado${filtered.length !== 1 ? 's' : ''}`;
+            if (filtered.length === 0) {
                 container.innerHTML = '';
                 emptyState.classList.remove('hidden');
                 emptyState.classList.add('flex');
                 return;
             }
-
             emptyState.classList.add('hidden');
             emptyState.classList.remove('flex');
-            
             let html = '';
-
-            employees.forEach(emp => {
+            filtered.forEach(emp => {
                 // Dynamic calculations (happens every render, automatically handles anniversaries!)
                 const yearsOfService = calculateCompletedYears(emp.startDate);
                 const totalEarned = calculateTotalEarnedDays(yearsOfService);
                 const availableBalance = totalEarned - emp.daysTaken;
                 const daysCurrentTier = getDaysForYear(yearsOfService + 1); // Days they will get next anniversary
-                
                 let balanceColorClass = availableBalance > 0 ? 'text-green-600' : 'text-slate-500';
-                
                 html += `
                 <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col transition-all hover:shadow-md">
                     <!-- Card Header -->
@@ -551,7 +556,6 @@
                             </svg>
                         </button>
                     </div>
-
                     <!-- Card Body -->
                     <div class="p-5 flex-grow">
                         <div class="grid grid-cols-2 gap-4 mb-4">
@@ -564,7 +568,6 @@
                                 <span class="font-medium text-sm text-slate-800">${yearsOfService} año(s)</span>
                             </div>
                         </div>
-
                         <div class="mb-5">
                             <h4 class="text-xs uppercase tracking-wider font-semibold text-slate-400 mb-3">Balance de Vacaciones</h4>
                             <div class="flex justify-between items-center mb-2">
@@ -580,7 +583,6 @@
                                 <span class="text-xl font-bold ${balanceColorClass}">${availableBalance} <span class="text-sm font-medium">días</span></span>
                             </div>
                         </div>
-
                         ${yearsOfService === 0 ? 
                             `<div class="text-xs text-orange-600 bg-orange-50 p-2 rounded-md mb-4 flex items-start gap-1">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -589,7 +591,6 @@
                                 Aún no cumple el año. En su 1er aniversario se le sumarán automáticamente 12 días.
                             </div>` : ''
                         }
-
                         <!-- Historial de Vacaciones -->
                         ${emp.vacationHistory && emp.vacationHistory.length > 0 ? `
                             <div class="mt-4 pt-4 border-t border-slate-100">
@@ -605,7 +606,6 @@
                             </div>
                         ` : ''}
                     </div>
-
                     <!-- Card Footer (Action) -->
                     <div class="bg-slate-50 p-4 border-t border-slate-200">
                         <label class="block text-xs font-medium text-slate-600 mb-2">Registrar Vacaciones Tomadas</label>
@@ -631,9 +631,17 @@
                 </div>
                 `;
             });
-
             container.innerHTML = html;
         }
+        // Forzar mayúsculas en el input de nombre mientras se escribe
+        document.addEventListener('DOMContentLoaded', function() {
+            const nameInput = document.getElementById('empName');
+            if (nameInput) {
+                nameInput.addEventListener('input', function(e) {
+                    e.target.value = e.target.value.toUpperCase();
+                });
+            }
+        });
 
         // --- 6. TOAST NOTIFICATIONS ---
         let toastTimeout;
