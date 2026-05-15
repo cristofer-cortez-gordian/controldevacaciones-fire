@@ -7,6 +7,8 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Agregamos la librería xlsx-js-style para exportar Excel con diseño -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.min.js"></script>
+    <!-- Supabase -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.7/dist/umd/supabase.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         body {
@@ -126,8 +128,11 @@
     </div>
 
     <script>
-        // --- 1. CONFIGURATION & STATE ---
-        const LOCAL_STORAGE_KEY = 'hr_vacation_data';
+
+        // --- 1. SUPABASE CONFIG ---
+        const SUPABASE_URL = 'https://tfazgymygyrsfscebpxo.supabase.co';
+        const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRmYXpneW15Z3lyc2ZzY2VicHhvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg3OTQyMTIsImV4cCI6MjA5NDM3MDIxMn0.dG4LohSUwuuJQo8BgqR_7eYa-v7XFr0npQ_N372f-5k';
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
         let employees = [];
 
         // --- 2. VACATION LAW LOGIC (LFT México - Vacaciones Dignas 2023) ---
@@ -184,73 +189,103 @@
 
         // --- 4. CORE APP LOGIC ---
 
-        function initApp() {
+
+        async function initApp() {
             // Display current date in header
             const todayOptions = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
             document.getElementById('currentDateDisplay').textContent = new Date().toLocaleDateString('es-MX', todayOptions);
 
-            // Load data
-            const savedData = localStorage.getItem(LOCAL_STORAGE_KEY);
-            if (savedData) {
-                try {
-                    employees = JSON.parse(savedData);
-                } catch (e) {
+            // Cargar empleados desde Supabase
+            try {
+                const { data, error } = await supabase.from('empleados').select('*');
+                if (!error && Array.isArray(data)) {
+                    // Cargar historial de vacaciones para cada empleado
+                    employees = await Promise.all(data.map(async emp => {
+                        // Buscar historial en Supabase
+                        const { data: history, error: histErr } = await supabase.from('historial_vacaciones').select('*').eq('empleado_id', emp.id).order('fecha_inicio', { ascending: false });
+                        return {
+                            id: emp.id,
+                            name: emp.nombre,
+                            nss: emp.nss,
+                            curp: emp.curp,
+                            rfc: emp.rfc,
+                            startDate: emp.fecha_ingreso,
+                            daysTaken: emp.dias_tomados || 0,
+                            vacationHistory: !histErr && Array.isArray(history) ? history.map(v => ({
+                                start: v.fecha_inicio,
+                                end: v.fecha_fin,
+                                days: v.dias,
+                                timestamp: v.timestamp
+                            })) : []
+                        };
+                    }));
+                } else {
                     employees = [];
                 }
+            } catch (err) {
+                employees = [];
             }
-            
             renderEmployees();
-
             // Setup Form Listener
             document.getElementById('addEmployeeForm').addEventListener('submit', handleAddEmployee);
         }
 
-        function saveToStorage() {
-            localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(employees));
-        }
 
-        function handleAddEmployee(e) {
+        // No se usa localStorage, todo va a Supabase
+
+        async function handleAddEmployee(e) {
             e.preventDefault();
-            
             const name = document.getElementById('empName').value.trim();
             const nss = document.getElementById('empNSS').value.trim();
             const curp = document.getElementById('empCURP').value.trim().toUpperCase();
             const rfc = document.getElementById('empRFC').value.trim().toUpperCase();
             const date = document.getElementById('empDate').value;
-
             if (!name || !nss || !curp || !rfc || !date) {
                 showToast("Por favor completa todos los campos.", "error");
                 return;
             }
-
-            const newEmployee = {
-                id: crypto.randomUUID(),
-                name,
-                nss,
-                curp,
-                rfc,
-                startDate: date,
-                daysTaken: 0, // Initialize taken days as 0
-                vacationHistory: [] // Store dates when vacations were taken
-            };
-
-            employees.unshift(newEmployee); // Add to beginning of array
-            saveToStorage();
-            
-            document.getElementById('addEmployeeForm').reset();
-            renderEmployees();
-            showToast("Colaborador registrado exitosamente.", "success");
+            try {
+                const { data, error } = await supabase.from('empleados').insert([
+                    {
+                        nombre: name,
+                        nss,
+                        curp,
+                        rfc,
+                        fecha_ingreso: date,
+                        dias_tomados: 0
+                    }
+                ]).select();
+                if (error) {
+                    showToast('Error al guardar en Supabase: ' + (error.message || error.details || 'Ver consola'), 'error');
+                    return;
+                } else if (data && data.length > 0) {
+                    const newEmployee = {
+                        id: data[0].id,
+                        name: data[0].nombre,
+                        nss: data[0].nss,
+                        curp: data[0].curp,
+                        rfc: data[0].rfc,
+                        startDate: data[0].fecha_ingreso,
+                        daysTaken: 0,
+                        vacationHistory: []
+                    };
+                    employees.unshift(newEmployee);
+                    document.getElementById('addEmployeeForm').reset();
+                    renderEmployees();
+                    showToast("Colaborador registrado exitosamente.", "success");
+                }
+            } catch (err) {
+                showToast('Error de red con Supabase. Ver consola.', 'error');
+            }
         }
 
-        function takeVacationDays(employeeId) {
+        async function takeVacationDays(employeeId) {
             const inputElement = document.getElementById(`vacation-input-${employeeId}`);
             const startInput = document.getElementById(`vac-start-${employeeId}`);
             const endInput = document.getElementById(`vac-end-${employeeId}`);
-            
             const daysToTake = parseInt(inputElement.value);
             const startDate = startInput.value;
             const endDate = endInput.value;
-
             if (isNaN(daysToTake) || daysToTake <= 0) {
                 showToast("Ingresa un número válido de días.", "error");
                 return;
@@ -263,39 +298,43 @@
                 showToast("La fecha de inicio no puede ser mayor a la fecha de fin.", "error");
                 return;
             }
-
             const empIndex = employees.findIndex(emp => emp.id === employeeId);
             if (empIndex === -1) return;
-
             const employee = employees[empIndex];
             const yearsOfService = calculateCompletedYears(employee.startDate);
             const totalEarned = calculateTotalEarnedDays(yearsOfService);
             const availableBalance = totalEarned - employee.daysTaken;
-
             if (daysToTake > availableBalance) {
                 showToast(`Operación denegada. El colaborador solo tiene ${availableBalance} días disponibles.`, "error");
                 return;
             }
-
-            // Ensure backward compatibility with existing data
-            if (!employees[empIndex].vacationHistory) {
-                employees[empIndex].vacationHistory = [];
-            }
-
-            // Register vacation record
-            employees[empIndex].vacationHistory.push({
-                start: startDate,
-                end: endDate,
-                days: daysToTake,
+            // Registrar en historial_vacaciones y actualizar dias_tomados en empleados
+            const vacRecord = {
+                empleado_id: employee.id,
+                fecha_inicio: startDate,
+                fecha_fin: endDate,
+                dias: daysToTake,
                 timestamp: new Date().toISOString()
-            });
-
-            // Subtract days (by adding to taken)
-            employees[empIndex].daysTaken += daysToTake;
-            saveToStorage();
-            renderEmployees();
-            
-            showToast(`Se registraron ${daysToTake} días de vacaciones tomados.`, "success");
+            };
+            try {
+                // Insertar en historial_vacaciones
+                await supabase.from('historial_vacaciones').insert([vacRecord]);
+                // Actualizar dias_tomados en empleados
+                const newDaysTaken = employee.daysTaken + daysToTake;
+                await supabase.from('empleados').update({ dias_tomados: newDaysTaken }).eq('id', employeeId);
+                // Actualizar local
+                employees[empIndex].daysTaken = newDaysTaken;
+                employees[empIndex].vacationHistory.unshift({
+                    start: startDate,
+                    end: endDate,
+                    days: daysToTake,
+                    timestamp: vacRecord.timestamp
+                });
+                renderEmployees();
+                showToast(`Se registraron ${daysToTake} días de vacaciones tomados.`, "success");
+            } catch (err) {
+                showToast('Error al registrar vacaciones en Supabase.', 'error');
+            }
         }
 
         function downloadReport() {
@@ -418,11 +457,15 @@
             showToast("Reporte profesional descargado exitosamente.", "success");
         }
 
-        function deleteEmployee(employeeId) {
-            employees = employees.filter(emp => emp.id !== employeeId);
-            saveToStorage();
-            renderEmployees();
-            showToast("Colaborador eliminado del sistema.", "success");
+        async function deleteEmployee(employeeId) {
+            try {
+                await supabase.from('empleados').delete().eq('id', employeeId);
+                employees = employees.filter(emp => emp.id !== employeeId);
+                renderEmployees();
+                showToast("Colaborador eliminado del sistema.", "success");
+            } catch (err) {
+                showToast('Error al eliminar en Supabase.', 'error');
+            }
         }
 
         function autoCalculateDays(employeeId) {
