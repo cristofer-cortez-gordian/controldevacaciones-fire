@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gestor de Vacaciones | HR</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Agregamos la librería xlsx-js-style para exportar Excel con diseño -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         body {
@@ -87,9 +89,17 @@
 
         <!-- Right Column: Employee List -->
         <div class="w-full lg:w-2/3">
-            <div class="mb-6 flex justify-between items-center">
-                <h2 class="text-xl font-semibold text-slate-800">Directorio de Colaboradores</h2>
-                <span id="employeeCount" class="bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded-full">0 registrados</span>
+            <div class="mb-6 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
+                <div class="flex items-center gap-3">
+                    <h2 class="text-xl font-semibold text-slate-800">Directorio de Colaboradores</h2>
+                    <span id="employeeCount" class="bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded-full">0 registrados</span>
+                </div>
+                <button onclick="downloadReport()" class="bg-green-600 hover:bg-green-700 text-white text-sm font-medium py-2 px-4 rounded-lg flex items-center justify-center gap-2 transition-colors shadow-sm">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    Descargar Excel
+                </button>
             </div>
             
             <div id="employeesList" class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -220,7 +230,8 @@
                 curp,
                 rfc,
                 startDate: date,
-                daysTaken: 0 // Initialize taken days as 0
+                daysTaken: 0, // Initialize taken days as 0
+                vacationHistory: [] // Store dates when vacations were taken
             };
 
             employees.unshift(newEmployee); // Add to beginning of array
@@ -233,10 +244,23 @@
 
         function takeVacationDays(employeeId) {
             const inputElement = document.getElementById(`vacation-input-${employeeId}`);
+            const startInput = document.getElementById(`vac-start-${employeeId}`);
+            const endInput = document.getElementById(`vac-end-${employeeId}`);
+            
             const daysToTake = parseInt(inputElement.value);
+            const startDate = startInput.value;
+            const endDate = endInput.value;
 
             if (isNaN(daysToTake) || daysToTake <= 0) {
                 showToast("Ingresa un número válido de días.", "error");
+                return;
+            }
+            if (!startDate || !endDate) {
+                showToast("Por favor selecciona las fechas de inicio y fin.", "error");
+                return;
+            }
+            if (new Date(startDate) > new Date(endDate)) {
+                showToast("La fecha de inicio no puede ser mayor a la fecha de fin.", "error");
                 return;
             }
 
@@ -253,6 +277,19 @@
                 return;
             }
 
+            // Ensure backward compatibility with existing data
+            if (!employees[empIndex].vacationHistory) {
+                employees[empIndex].vacationHistory = [];
+            }
+
+            // Register vacation record
+            employees[empIndex].vacationHistory.push({
+                start: startDate,
+                end: endDate,
+                days: daysToTake,
+                timestamp: new Date().toISOString()
+            });
+
             // Subtract days (by adding to taken)
             employees[empIndex].daysTaken += daysToTake;
             saveToStorage();
@@ -261,11 +298,166 @@
             showToast(`Se registraron ${daysToTake} días de vacaciones tomados.`, "success");
         }
 
+        function downloadReport() {
+            if (employees.length === 0) {
+                showToast("No hay datos para exportar.", "error");
+                return;
+            }
+
+            // 1. Crear un nuevo libro de trabajo de Excel
+            const wb = XLSX.utils.book_new();
+            const data = [];
+
+            // 2. Título principal
+            data.push(["REPORTE DE VACACIONES - RECURSOS HUMANOS"]);
+            data.push([`Generado el: ${new Date().toLocaleDateString('es-MX')}`]);
+            data.push([]); // Fila vacía para separación
+
+            // 3. Encabezados de tabla
+            const headers = [
+                "Nombre Completo", "NSS", "CURP", "RFC", "Fecha Ingreso", 
+                "Antigüedad (Años)", "Vac. Ganadas", "Días Tomados", 
+                "Saldo Disponible", "Historial de Fechas"
+            ];
+            data.push(headers);
+
+            // 4. Llenar los datos
+            employees.forEach(emp => {
+                const years = calculateCompletedYears(emp.startDate);
+                const total = calculateTotalEarnedDays(years);
+                const balance = total - emp.daysTaken;
+                
+                let historyStr = "Sin historial";
+                if (emp.vacationHistory && emp.vacationHistory.length > 0) {
+                    historyStr = emp.vacationHistory.map(v => `Del ${formatDate(v.start)} al ${formatDate(v.end)} (${v.days}d)`).join(" | ");
+                }
+
+                data.push([
+                    emp.name, 
+                    emp.nss, 
+                    emp.curp, 
+                    emp.rfc, 
+                    formatDate(emp.startDate),
+                    years, 
+                    total, 
+                    emp.daysTaken, 
+                    balance, 
+                    historyStr
+                ]);
+            });
+
+            // 5. Convertir el array a una hoja de cálculo
+            const ws = XLSX.utils.aoa_to_sheet(data);
+
+            // 6. Aplicar Estilos al Excel
+            // Estilo Título
+            ws["A1"].s = { 
+                font: { sz: 14, bold: true, color: { rgb: "FFFFFF" } }, 
+                fill: { fgColor: { rgb: "1D4ED8" } }, // Azul de Tailwind
+                alignment: { horizontal: "center", vertical: "center" } 
+            };
+            // Combinar celdas para el título (De A1 a J1)
+            ws["!merges"] = [ { s: { r: 0, c: 0 }, e: { r: 0, c: 9 } } ];
+
+            // Estilo de los encabezados (Fila 4 - índice 3)
+            const headerStyle = { 
+                font: { bold: true, color: { rgb: "1E293B" } }, 
+                fill: { fgColor: { rgb: "DBEAFE" } }, // Azul claro
+                border: { 
+                    top: {style:'thin', color:{auto:1}}, 
+                    bottom: {style:'thin', color:{auto:1}}, 
+                    left: {style:'thin', color:{auto:1}}, 
+                    right: {style:'thin', color:{auto:1}} 
+                },
+                alignment: { horizontal: "center" }
+            };
+
+            for(let C = 0; C < 10; ++C) {
+                const cellRef = XLSX.utils.encode_cell({r: 3, c: C});
+                if(!ws[cellRef]) continue;
+                ws[cellRef].s = headerStyle;
+            }
+
+            // Estilos para las filas de datos (Bordes)
+            const dataStyle = { 
+                border: { 
+                    top: {style:'thin', color:{rgb:"E2E8F0"}}, 
+                    bottom: {style:'thin', color:{rgb:"E2E8F0"}}, 
+                    left: {style:'thin', color:{rgb:"E2E8F0"}}, 
+                    right: {style:'thin', color:{rgb:"E2E8F0"}} 
+                },
+                alignment: { vertical: "center" }
+            };
+
+            for(let R = 4; R < data.length; ++R) {
+                for(let C = 0; C < 10; ++C) {
+                    const cellRef = XLSX.utils.encode_cell({r: R, c: C});
+                    if(!ws[cellRef]) ws[cellRef] = {t: 's', v: ''}; // Crear si está vacía
+                    ws[cellRef].s = dataStyle;
+                }
+            }
+
+            // Ancho de las columnas
+            ws["!cols"] = [
+                {wch: 35}, // Nombre
+                {wch: 15}, // NSS
+                {wch: 22}, // CURP
+                {wch: 15}, // RFC
+                {wch: 20}, // Fecha
+                {wch: 18}, // Antigüedad
+                {wch: 15}, // Ganadas
+                {wch: 15}, // Tomados
+                {wch: 16}, // Saldo
+                {wch: 60}  // Historial (Ancho para leer bien)
+            ];
+
+            // 7. Generar el archivo final
+            XLSX.utils.book_append_sheet(wb, ws, "Base Vacaciones");
+            XLSX.writeFile(wb, `Reporte_Vacaciones_HR_${new Date().toISOString().split('T')[0]}.xlsx`);
+            
+            showToast("Reporte profesional descargado exitosamente.", "success");
+        }
+
         function deleteEmployee(employeeId) {
             employees = employees.filter(emp => emp.id !== employeeId);
             saveToStorage();
             renderEmployees();
             showToast("Colaborador eliminado del sistema.", "success");
+        }
+
+        function autoCalculateDays(employeeId) {
+            const startInput = document.getElementById(`vac-start-${employeeId}`);
+            const endInput = document.getElementById(`vac-end-${employeeId}`);
+            const daysInput = document.getElementById(`vacation-input-${employeeId}`);
+            
+            if (startInput.value && endInput.value) {
+                const start = new Date(startInput.value);
+                const end = new Date(endInput.value);
+                
+                // Ajustar zona horaria para evitar desfasamientos
+                start.setMinutes(start.getMinutes() + start.getTimezoneOffset());
+                end.setMinutes(end.getMinutes() + end.getTimezoneOffset());
+
+                if (end >= start) {
+                    let count = 0;
+                    let curDate = new Date(start);
+                    
+                    // Iterar día por día desde el inicio hasta el fin
+                    while (curDate <= end) {
+                        const dayOfWeek = curDate.getDay();
+                        // 0 es Domingo, 6 es Sábado. Solo contamos de Lunes(1) a Viernes(5)
+                        if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+                            count++;
+                        }
+                        // Avanzar al siguiente día
+                        curDate.setDate(curDate.getDate() + 1);
+                    }
+                    
+                    daysInput.value = count;
+                } else {
+                    daysInput.value = ''; // Limpiar si la fecha de fin es menor a la de inicio
+                }
+            }
         }
 
         // --- 5. UI RENDERING ---
@@ -354,16 +546,43 @@
                                 Aún no cumple el año. En su 1er aniversario se le sumarán automáticamente 12 días.
                             </div>` : ''
                         }
+
+                        <!-- Historial de Vacaciones -->
+                        ${emp.vacationHistory && emp.vacationHistory.length > 0 ? `
+                            <div class="mt-4 pt-4 border-t border-slate-100">
+                                <h4 class="text-xs uppercase tracking-wider font-semibold text-slate-400 mb-2">Historial de Fechas</h4>
+                                <ul class="text-[11px] text-slate-600 space-y-1 max-h-24 overflow-y-auto pr-1">
+                                    ${emp.vacationHistory.map(v => `
+                                        <li class="flex justify-between items-center bg-slate-50 p-1.5 rounded">
+                                            <span>Del <strong>${formatDate(v.start)}</strong> al <strong>${formatDate(v.end)}</strong></span>
+                                            <span class="font-medium text-red-500">-${v.days}d</span>
+                                        </li>
+                                    `).join('')}
+                                </ul>
+                            </div>
+                        ` : ''}
                     </div>
 
                     <!-- Card Footer (Action) -->
                     <div class="bg-slate-50 p-4 border-t border-slate-200">
                         <label class="block text-xs font-medium text-slate-600 mb-2">Registrar Vacaciones Tomadas</label>
-                        <div class="flex gap-2">
-                            <input type="number" id="vacation-input-${emp.id}" min="1" max="${availableBalance}" class="w-20 px-3 py-1.5 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Días">
-                            <button onclick="takeVacationDays('${emp.id}')" ${availableBalance === 0 ? 'disabled' : ''} class="flex-grow bg-slate-800 hover:bg-slate-900 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-sm font-medium py-1.5 px-3 rounded-lg transition-colors">
-                                Descontar Días
-                            </button>
+                        <div class="flex flex-col gap-2">
+                            <div class="grid grid-cols-2 gap-2">
+                                <div>
+                                    <span class="block text-[10px] text-slate-500 mb-0.5">Fecha Inicio</span>
+                                    <input type="date" id="vac-start-${emp.id}" onchange="autoCalculateDays('${emp.id}')" class="w-full px-2 py-1.5 text-xs border border-slate-300 rounded-md outline-none focus:ring-1 focus:ring-blue-500">
+                                </div>
+                                <div>
+                                    <span class="block text-[10px] text-slate-500 mb-0.5">Fecha Fin</span>
+                                    <input type="date" id="vac-end-${emp.id}" onchange="autoCalculateDays('${emp.id}')" class="w-full px-2 py-1.5 text-xs border border-slate-300 rounded-md outline-none focus:ring-1 focus:ring-blue-500">
+                                </div>
+                            </div>
+                            <div class="flex gap-2">
+                                <input type="number" id="vacation-input-${emp.id}" min="1" max="${availableBalance}" class="w-20 px-3 py-1.5 text-sm border border-slate-300 rounded-md focus:ring-1 focus:ring-blue-500 outline-none" placeholder="Días">
+                                <button onclick="takeVacationDays('${emp.id}')" ${availableBalance === 0 ? 'disabled' : ''} class="flex-grow bg-slate-800 hover:bg-slate-900 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-sm font-medium py-1.5 px-3 rounded-md transition-colors">
+                                    Descontar
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
